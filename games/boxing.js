@@ -213,10 +213,15 @@ export class GameInstance {
             this.ctx.scale(-1, 1);
             this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
-            // Dynamic tint if guarding
-            this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.1)' : 'rgba(0,0,0,0.3)';
+        } else {
+            // Fallback if webcam is not ready yet
+            this.ctx.fillStyle = '#050510';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
+
+        // Tint overlay
+        this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.15)' : 'rgba(0,0,0,0.3)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         if (this.currentPad) this.drawPad(this.currentPad);
 
@@ -255,12 +260,20 @@ export class GameInstance {
 
         // Effects
         this.hitEffects.forEach(fx => {
-            this.ctx.globalAlpha = fx.life / 50;
+            this.ctx.save();
+            this.ctx.globalAlpha = Math.max(0, fx.life / 50);
             this.ctx.fillStyle = fx.color;
             this.ctx.font = 'bold 28px Orbitron';
             this.ctx.textAlign = 'center';
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowColor = fx.color;
             this.ctx.fillText(fx.text, fx.x, fx.y);
+            this.ctx.restore();
         });
+        
+        // Reset state just in case
+        this.ctx.globalAlpha = 1.0;
+        this.ctx.shadowBlur = 0;
         
         this.drawHUD();
     }
