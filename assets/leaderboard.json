@@ -1,0 +1,9 @@
+{
+    "leaderboard": [
+        {"name": "CYBER_PUNK", "score": 12500, "rank": 1},
+        {"name": "NEON_WAVE", "score": 9800, "rank": 2},
+        {"name": "GHOST_SHELL", "score": 8400, "rank": 3},
+        {"name": "DATA_DRIVE", "score": 7200, "rank": 4},
+        {"name": "VOID_WALKER", "score": 5100, "rank": 5}
+    ]
+}

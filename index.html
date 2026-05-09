@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GesturePlay AI | Futuristic Gesture Gaming</title>
+    <meta name="description" content="Play futuristic games using your hand gestures. Powered by AI and MediaPipe.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+    <div class="scanlines"></div>
+    <!-- Loading Screen -->
+    <div id="loader" class="loader-wrapper">
+        <div class="loader-content">
+            <h1 class="glitch" data-text="GESTUREPLAY AI">GESTUREPLAY AI</h1>
+            <div class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <p id="loader-status">Initializing Neural Interface...</p>
+        </div>
+    </div>
+
+    <!-- Main Navigation -->
+    <nav class="navbar">
+        <div class="logo">
+            <span class="logo-icon">GP</span>
+            <span class="logo-text">GESTUREPLAY <span class="ai-badge">AI</span></span>
+        </div>
+        <div class="nav-controls">
+            <button id="mute-btn" class="icon-btn" title="Toggle Sound">
+                <span id="mute-icon">🔊</span>
+            </button>
+            <button id="settings-btn" class="icon-btn" title="Settings">
+                <span>⚙️</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- App Container -->
+    <main id="app-container">
+        <!-- Dashboard -->
+        <section id="dashboard" class="view active">
+            <div class="hero">
+                <h1>The Future of <span class="gradient-text">Gaming</span> is in Your Hands</h1>
+                <p>Experience touchless control with AI-powered hand tracking. No controller needed.</p>
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <span id="total-score-display">0</span>
+                        <label>Total Score</label>
+                    </div>
+                    <div class="stat-item">
+                        <span id="games-played-display">0</span>
+                        <label>Games Played</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="game-grid">
+                <!-- Flappy Bird -->
+                <div class="game-card" data-game="flappy">
+                    <div class="card-image flappy-bg"></div>
+                    <div class="card-content">
+                        <h3>Sky Glide</h3>
+                        <p>Control the flight by moving your hand up and down.</p>
+                        <div class="card-footer">
+                            <span class="high-score">High: <span id="high-flappy">0</span></span>
+                            <button class="play-btn">PLAY</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Fruit Ninja -->
+                <div class="game-card" data-game="ninja">
+                    <div class="card-image ninja-bg"></div>
+                    <div class="card-content">
+                        <h3>Blade Master</h3>
+                        <p>Slice fruits with rapid hand movements. Watch out for bombs!</p>
+                        <div class="card-footer">
+                            <span class="high-score">High: <span id="high-ninja">0</span></span>
+                            <button class="play-btn">PLAY</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Car Racing -->
+                <div class="game-card" data-game="racing">
+                    <div class="card-image racing-bg"></div>
+                    <div class="card-content">
+                        <h3>Neon Racer</h3>
+                        <p>Steer your car through traffic using left and right gestures.</p>
+                        <div class="card-footer">
+                            <span class="high-score">High: <span id="high-racing">0</span></span>
+                            <button class="play-btn">PLAY</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shadow Strike (New Game) -->
+                <div class="game-card" data-game="strike">
+                    <div class="card-image strike-bg"></div>
+                    <div class="card-content">
+                        <h3>Shadow Strike</h3>
+                        <p>Punch incoming neon nodes using both hands. Speed is everything!</p>
+                        <div class="card-footer">
+                            <span class="high-score">High: <span id="high-strike">0</span></span>
+                            <button class="play-btn">STRIKE</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Boxing Arena -->
+                <div class="game-card" data-game="boxing">
+                    <div class="card-image boxing-bg"></div>
+                    <div class="card-content">
+                        <h3>Boxing Arena</h3>
+                        <p>Your webcam IS the ring. Use real fists. Dodge with your head. Pure reflex.</p>
+                        <div class="card-footer">
+                            <span class="high-score">High: <span id="high-boxing">0</span></span>
+                            <button class="play-btn" style="background:var(--accent)">FIGHT</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Doodle -->
+                <div class="game-card" data-game="doodle">
+                    <div class="card-image doodle-bg"></div>
+                    <div class="card-content">
+                        <h3>Air Canvas Pro</h3>
+                        <p>Draw with index, Erase with palm. Futuristic precision.</p>
+                        <div class="card-footer">
+                            <span class="high-score">V2.0</span>
+                            <button class="play-btn">DRAW</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="quotes-section">
+                <p id="game-quote">"The only limit is your imagination... and the webcam's FOV."</p>
+            </div>
+        </section>
+
+        <!-- Game Screen -->
+        <section id="game-screen" class="view">
+            <div class="game-header">
+                <button id="back-to-dashboard" class="back-btn">← Back</button>
+                <div class="game-info">
+                    <h2 id="current-game-title">Game Title</h2>
+                    <div id="game-score-board">Score: <span id="game-score">0</span></div>
+                </div>
+                <div class="game-options">
+                    <label class="toggle-container">
+                        <input type="checkbox" id="toggle-skeleton">
+                        <span class="toggle-label">Skeleton View</span>
+                    </label>
+                </div>
+                <div class="webcam-status" id="webcam-status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Webcam Ready</span>
+                </div>
+            </div>
+
+            <div class="game-viewport">
+                <canvas id="game-canvas"></canvas>
+                <div id="instruction-overlay" class="overlay">
+                    <div class="overlay-content">
+                        <h2>How to Play</h2>
+                        <div id="game-instructions-text">Instructions go here...</div>
+                        <button id="start-game-btn" class="cta-btn">START NEURAL LINK</button>
+                    </div>
+                </div>
+                <div id="game-over-overlay" class="overlay hidden">
+                    <div class="overlay-content">
+                        <h2 class="danger-text">CONNECTION LOST</h2>
+                        <p>Your score: <span id="final-score">0</span></p>
+                        <p id="new-high-score-msg" class="hidden">NEW HIGH SCORE!</p>
+                        <div class="overlay-btns">
+                            <button id="restart-game-btn" class="cta-btn">RETRY</button>
+                            <button id="exit-game-btn" class="secondary-btn">DASHBOARD</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hand Tracking Debug / Small Preview -->
+            <div class="webcam-preview-container">
+                <video id="webcam-video" autoplay playsinline></video>
+                <canvas id="hand-mesh-canvas"></canvas>
+            </div>
+        </section>
+    </main>
+
+    <!-- Leaderboard Modal (Fetch API demo) -->
+    <div id="leaderboard-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <h2>Global Standings</h2>
+            <div id="leaderboard-list">
+                <!-- Loaded via Fetch -->
+            </div>
+            <button id="close-leaderboard" class="close-modal">Close</button>
+        </div>
+    </div>
+
+    <!-- Audio Elements (Placeholders) -->
+    <div class="audio-assets">
+        <audio id="bg-music" loop></audio>
+        <audio id="sfx-hover"></audio>
+        <audio id="sfx-select"></audio>
+        <audio id="sfx-point"></audio>
+        <audio id="sfx-die"></audio>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="script.js" type="module"></script>
+</body>
+</html>
