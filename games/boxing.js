@@ -1,14 +1,11 @@
 /**
- * Boxing Arena v2 - Clear Sequential Boxing
- *
- * HOW IT WORKS:
- * - ONE pad at a time slides in from a clear direction
- * - LEFT JAB pad → slides in from LEFT side
- * - RIGHT JAB pad → slides in from RIGHT side
- * - HOOK pad → drops from TOP
- * - DODGE pad → a punch COMES AT YOU, move your head sideways to avoid
- * - Make a FIST and PUNCH the pad when it reaches the hit zone
- * - Webcam background so you see yourself boxing
+ * Boxing Arena v3 - With Guard & Block System
+ * 
+ * UPDATES:
+ * - Added GUARD gesture (both fists close together near face)
+ * - Removed HEAD DODGE in favor of GUARD/BLOCK
+ * - Improved HOOK hit zone (lower and wider)
+ * - Enhanced fist visibility
  */
 import { sound } from "../sounds.js";
 
@@ -25,12 +22,10 @@ export class GameInstance {
         this.hitEffects = [];
         this.video = null;
 
-        // Current active pad (only ONE at a time)
         this.currentPad = null;
-        this.waitingForNext = false;
+        this.isGuarding = false;
 
-        // The sequence of pads that come in order (loops)
-        this.sequence = ['left', 'right', 'left', 'right', 'hook', 'right', 'dodge', 'left'];
+        this.sequence = ['left', 'right', 'left', 'right', 'hook', 'right', 'block', 'left'];
         this.seqIndex = 0;
 
         this.resize();
@@ -43,18 +38,14 @@ export class GameInstance {
         this.canvas.height = rect.height;
     }
 
-    // How fast pad slides in — increases with score
-    get slideSpeed() { return 3 + Math.floor(this.score / 15) * 0.8; }
-    // How long the pad stays in the hit zone before it counts as missed
-    get holdFrames() { return Math.max(40, 90 - Math.floor(this.score / 10) * 8); }
+    get slideSpeed() { return 3.5 + Math.floor(this.score / 20) * 0.8; }
+    get holdFrames() { return Math.max(45, 100 - Math.floor(this.score / 12) * 8); }
 
     start() {
         this.isRunning = true;
         this.score = 0;
         this.combo = 0;
         this.health = 100;
-        this.frameCount = 0;
-        this.hitEffects = [];
         this.currentPad = null;
         this.seqIndex = 0;
         this.video = document.getElementById('webcam-video');
@@ -72,37 +63,29 @@ export class GameInstance {
         const W = this.canvas.width;
         const H = this.canvas.height;
 
-        // Hit zone = center target area
-        const hitX = W / 2;
-        const hitY = H * 0.42;
-
         let startX, startY, endX, endY;
 
         if (type === 'left') {
-            // Pad comes from the LEFT
-            startX = -120; startY = H * 0.42;
-            endX = W * 0.28; endY = H * 0.42;
+            startX = -150; startY = H * 0.45;
+            endX = W * 0.25; endY = H * 0.45;
         } else if (type === 'right') {
-            // Pad comes from the RIGHT
-            startX = W + 120; startY = H * 0.42;
-            endX = W * 0.72; endY = H * 0.42;
+            startX = W + 150; startY = H * 0.45;
+            endX = W * 0.75; endY = H * 0.45;
         } else if (type === 'hook') {
-            // Pad drops from TOP
-            startX = W * 0.5; startY = -120;
-            endX = W * 0.5;   endY = H * 0.28;
-        } else if (type === 'dodge') {
-            // A punch comes AT the player — appear center, move TOWARD camera
+            startX = W * 0.5; startY = -150;
+            // Lowered endY for Hook so it's easier to hit (was 0.28, now 0.35)
+            endX = W * 0.5;   endY = H * 0.35;
+        } else if (type === 'block') {
             startX = W * 0.5; startY = H * 0.1;
-            endX = W * 0.5;   endY = H * 0.55;
+            endX = W * 0.5;   endY = H * 0.5;
         }
 
         this.currentPad = {
             type,
             x: startX, y: startY,
             endX, endY,
-            startX, startY,
-            width: 110, height: 130,
-            phase: 'entering', // 'entering' → 'hold' → 'exiting' / 'missed'
+            width: 130, height: 150,
+            phase: 'entering',
             holdTimer: 0,
             hit: false,
             scale: 1,
@@ -125,119 +108,87 @@ export class GameInstance {
         };
     }
 
-    // Estimate head center (nose/face) from available hand data.
-    // We use the wrist position of both hands averaged and offset upward.
-    getHeadX(landmarks) {
-        if (!landmarks || !landmarks.length) return this.canvas.width / 2;
-        let avgX = landmarks.reduce((s, hand) => s + (1 - hand[0].x), 0) / landmarks.length;
-        return avgX * this.canvas.width;
+    checkGuard(landmarks) {
+        if (landmarks.length < 2) return false;
+        
+        const f1 = this.getFistCenter(landmarks[0]);
+        const f2 = this.getFistCenter(landmarks[1]);
+        
+        const dist = Math.hypot(f1.x - f2.x, f1.y - f2.y);
+        // If fists are close and in the upper half of the screen
+        return dist < 180 && f1.y < this.canvas.height * 0.6 && f2.y < this.canvas.height * 0.6;
     }
 
     update() {
         if (!this.isRunning) return;
         this.frameCount++;
 
+        const results = this.gameState.results;
+        const landmarks = results?.landmarks || [];
+        
+        // Update Guard state
+        this.isGuarding = this.checkGuard(landmarks);
+
         const pad = this.currentPad;
-        if (!pad) return;
-
-        // ─── Phase: ENTERING ───────────────────────────────────────────
-        if (pad.phase === 'entering') {
-            const dx = pad.endX - pad.x;
-            const dy = pad.endY - pad.y;
-            const dist = Math.hypot(dx, dy);
-
-            if (dist < this.slideSpeed + 1) {
-                pad.x = pad.endX;
-                pad.y = pad.endY;
-                pad.phase = 'hold';
-                pad.holdTimer = 0;
-                // Scale-pop effect
-                pad.scale = 1.2;
-            } else {
-                const spd = this.slideSpeed;
-                pad.x += (dx / dist) * spd;
-                pad.y += (dy / dist) * spd;
-            }
-        }
-
-        // ─── Phase: HOLD ───────────────────────────────────────────────
-        else if (pad.phase === 'hold') {
-            // Ease scale back to 1
-            pad.scale += (1 - pad.scale) * 0.2;
-            pad.holdTimer++;
-
-            const results = this.gameState.results;
-            const landmarks = results?.landmarks || [];
-
-            if (pad.type === 'dodge') {
-                // DODGE: player must move head to the side
-                const headX = this.getHeadX(landmarks);
-                const centerX = this.canvas.width / 2;
-                const dodge = Math.abs(headX - centerX) > this.canvas.width * 0.15;
-
-                if (dodge) {
-                    this.registerHit(pad, 'DODGE!', '#00ff88');
+        if (pad) {
+            if (pad.phase === 'entering') {
+                const dx = pad.endX - pad.x;
+                const dy = pad.endY - pad.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist < this.slideSpeed + 2) {
+                    pad.x = pad.endX; pad.y = pad.endY;
+                    pad.phase = 'hold';
+                    pad.scale = 1.3;
+                } else {
+                    pad.x += (dx / dist) * this.slideSpeed;
+                    pad.y += (dy / dist) * this.slideSpeed;
                 }
-            } else {
-                // HIT: player must make a fist and reach the pad
-                for (const hand of landmarks) {
-                    if (!this.isFist(hand)) continue;
-                    const fc = this.getFistCenter(hand);
-                    const dist = Math.hypot(fc.x - pad.x, fc.y - pad.y);
+            } else if (pad.phase === 'hold') {
+                pad.scale += (1 - pad.scale) * 0.2;
+                pad.holdTimer++;
 
-                    // For left pad → prefer right hand (mirrored), vice versa
-                    const handedness = results.handedness;
-                    // Accept any fist within range
-                    if (dist < pad.width * 0.7) {
-                        // Check fist speed (detect punch, not just touching)
-                        const prevKey = `prev_${landmarks.indexOf(hand)}`;
-                        const prev = this[prevKey] || fc;
-                        const speed = Math.hypot(fc.x - prev.x, fc.y - prev.y);
-                        this[prevKey] = { ...fc };
-                        if (speed > 8) {
-                            this.registerHit(pad, pad.type.toUpperCase() + ' HIT!', '#00f2ff');
+                if (pad.type === 'block') {
+                    if (this.isGuarding) {
+                        this.registerHit(pad, 'PERFECT BLOCK!', '#00ff88');
+                    }
+                } else {
+                    for (const hand of landmarks) {
+                        if (!this.isFist(hand)) continue;
+                        const fc = this.getFistCenter(hand);
+                        const dist = Math.hypot(fc.x - pad.x, fc.y - pad.y);
+                        
+                        // Larger hit area for Hook and Jabs
+                        const hitRange = pad.type === 'hook' ? pad.width * 0.9 : pad.width * 0.7;
+                        
+                        if (dist < hitRange) {
+                            this.registerHit(pad, pad.type.toUpperCase() + '!', '#00f2ff');
                             break;
                         }
-                    } else {
-                        this[`prev_${landmarks.indexOf(hand)}`] = { ...fc };
                     }
                 }
-            }
 
-            // Missed?
-            if (pad.holdTimer > this.holdFrames && !pad.hit) {
-                pad.phase = 'missed';
-                this.health -= 20;
-                this.combo = 0;
-                this.hitEffects.push({ x: pad.x, y: pad.y - 30, text: 'MISS! -20HP', life: 50, color: '#ff3e3e' });
-                sound.play('crash');
-                if (this.health <= 0) { this.health = 0; this.gameOver(); return; }
-                pad.phase = 'exiting';
-            }
-        }
-
-        // ─── Phase: EXITING ────────────────────────────────────────────
-        else if (pad.phase === 'exiting') {
-            pad.alpha -= 0.07;
-            pad.scale += 0.04;
-            if (pad.alpha <= 0) {
-                this.currentPad = null;
-                // Wait a beat, then spawn next
-                const delay = Math.max(400, 1200 - this.score * 10);
-                setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, delay);
+                if (pad.holdTimer > this.holdFrames && !pad.hit) {
+                    this.health -= 20;
+                    this.combo = 0;
+                    this.hitEffects.push({ x: pad.x, y: pad.y, text: 'OOF! -20HP', life: 45, color: '#ff3e3e' });
+                    sound.play('crash');
+                    if (this.health <= 0) { this.health = 0; this.gameOver(); return; }
+                    pad.phase = 'exiting';
+                }
+            } else if (pad.phase === 'exiting') {
+                pad.alpha -= 0.1;
+                pad.scale += 0.05;
+                if (pad.alpha <= 0) {
+                    this.currentPad = null;
+                    setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, 600);
+                }
             }
         }
 
-        // Age hit effects
+        // Hit effects
         for (let i = this.hitEffects.length - 1; i >= 0; i--) {
             this.hitEffects[i].life--;
-            this.hitEffects[i].y -= 0.6;
             if (this.hitEffects[i].life <= 0) this.hitEffects.splice(i, 1);
-        }
-
-        // Pulse dodge pad toward camera (grow to show "coming at you")
-        if (pad && pad.type === 'dodge' && pad.phase === 'hold') {
-            pad.scale = 1 + (pad.holdTimer / this.holdFrames) * 0.6;
         }
     }
 
@@ -246,239 +197,134 @@ export class GameInstance {
         pad.hit = true;
         pad.phase = 'exiting';
         this.combo++;
-        const pts = 10 * (this.combo > 3 ? 2 : 1);
+        const pts = 15 * (this.combo > 3 ? 2 : 1);
         this.score += pts;
         this.updateScore(this.score);
-        this.hitEffects.push({
-            x: pad.x, y: pad.y - 20,
-            text: `${text} +${pts}${this.combo > 3 ? ' COMBO!' : ''}`,
-            life: 55, color
-        });
+        this.hitEffects.push({ x: pad.x, y: pad.y - 40, text, life: 50, color });
         sound.play('point');
     }
 
     draw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // ── Webcam background ──
         if (this.video && this.video.readyState >= 2) {
             this.ctx.save();
             this.ctx.translate(this.canvas.width, 0);
             this.ctx.scale(-1, 1);
             this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
-            this.ctx.fillStyle = 'rgba(0,0,0,0.35)';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        } else {
-            this.ctx.fillStyle = '#0a0010';
+            // Dynamic tint if guarding
+            this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.1)' : 'rgba(0,0,0,0.3)';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
 
-        // ── Draw the active pad ──
-        const pad = this.currentPad;
-        if (pad) this.drawPad(pad);
+        if (this.currentPad) this.drawPad(this.currentPad);
 
-        // ── Draw fist indicators from hands ──
+        // Hands/Fists
         const landmarks = this.gameState.results?.landmarks || [];
         landmarks.forEach(hand => {
             const fist = this.isFist(hand);
             const fc = this.getFistCenter(hand);
-            this.ctx.shadowBlur = fist ? 30 : 10;
-            this.ctx.shadowColor = fist ? '#ff3e3e' : '#00f2ff';
-            this.ctx.strokeStyle = fist ? '#ff3e3e' : '#00f2ff';
-            this.ctx.lineWidth = fist ? 4 : 2;
+            this.ctx.shadowBlur = fist ? 25 : 5;
+            this.ctx.shadowColor = this.isGuarding ? '#00f2ff' : (fist ? '#ff3e3e' : '#ffffff');
+            this.ctx.strokeStyle = this.ctx.shadowColor;
+            this.ctx.lineWidth = 4;
             this.ctx.beginPath();
-            this.ctx.arc(fc.x, fc.y, fist ? 45 : 28, 0, Math.PI * 2);
+            this.ctx.arc(fc.x, fc.y, fist ? 45 : 30, 0, Math.PI * 2);
             this.ctx.stroke();
             if (fist) {
-                this.ctx.fillStyle = 'rgba(255,62,62,0.15)';
+                this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.2)' : 'rgba(255,62,62,0.2)';
                 this.ctx.fill();
-                this.ctx.fillStyle = 'white';
-                this.ctx.font = 'bold 14px Orbitron';
-                this.ctx.textAlign = 'center';
-                this.ctx.fillText('FIST', fc.x, fc.y + 5);
             }
-            this.ctx.shadowBlur = 0;
         });
 
-        // ── Instructions overlay for current pad type ──
-        if (pad && pad.phase === 'hold') {
-            const tip = {
-                left:  '← PUNCH LEFT PAD',
-                right: 'PUNCH RIGHT PAD →',
-                hook:  '↑ PUNCH THE HOOK',
-                dodge: '← DODGE YOUR HEAD →',
-            }[pad.type] || '';
-            this.ctx.fillStyle = pad.type === 'dodge' ? '#ff3e3e' : '#ffffff';
-            this.ctx.font = `bold ${pad.type === 'dodge' ? '26' : '20'}px Orbitron`;
+        // Instructions
+        if (this.currentPad?.phase === 'hold') {
+            let tip = "";
+            if (this.currentPad.type === 'block') tip = "🛡️ PUT HANDS TOGETHER TO BLOCK!";
+            else if (this.currentPad.type === 'hook') tip = "↑ HOOK! REACH UP!";
+            else tip = `PUNCH THE ${this.currentPad.type.toUpperCase()}!`;
+
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = 'bold 24px Orbitron';
             this.ctx.textAlign = 'center';
-            this.ctx.shadowBlur = 10;
-            this.ctx.shadowColor = pad.type === 'dodge' ? '#ff3e3e' : '#00f2ff';
-            this.ctx.fillText(tip, this.canvas.width / 2, this.canvas.height - 40);
-            this.ctx.shadowBlur = 0;
+            this.ctx.shadowBlur = 15;
+            this.ctx.shadowColor = '#00f2ff';
+            this.ctx.fillText(tip, this.canvas.width/2, this.canvas.height - 60);
         }
 
-        // ── Hit effects ──
+        // Effects
         this.hitEffects.forEach(fx => {
-            this.ctx.globalAlpha = Math.min(1, fx.life / 30);
+            this.ctx.globalAlpha = fx.life / 50;
             this.ctx.fillStyle = fx.color;
-            this.ctx.shadowBlur = 10;
-            this.ctx.shadowColor = fx.color;
-            this.ctx.font = 'bold 22px Orbitron';
+            this.ctx.font = 'bold 28px Orbitron';
             this.ctx.textAlign = 'center';
             this.ctx.fillText(fx.text, fx.x, fx.y);
         });
-        this.ctx.globalAlpha = 1;
-        this.ctx.textAlign = 'left';
-        this.ctx.shadowBlur = 0;
-
-        // ── HUD ──
+        
         this.drawHUD();
     }
 
     drawPad(pad) {
         this.ctx.save();
-        this.ctx.globalAlpha = Math.max(0, pad.alpha);
+        this.ctx.globalAlpha = pad.alpha;
         this.ctx.translate(pad.x, pad.y);
         this.ctx.scale(pad.scale, pad.scale);
 
-        const configs = {
-            left:  { color: '#00f2ff', label: 'JAB\n←',   shape: 'rect' },
-            right: { color: '#bc13fe', label: 'JAB\n→',   shape: 'rect' },
-            hook:  { color: '#ffa500', label: 'HOOK\n↑',  shape: 'rect' },
-            dodge: { color: '#ff3e3e', label: 'DODGE\n!', shape: 'circle' },
-        };
-        const cfg = configs[pad.type];
-        const W = pad.width / 2;
-        const H = pad.height / 2;
+        const colors = { left: '#00f2ff', right: '#bc13fe', hook: '#ffa500', block: '#ff3e3e' };
+        const color = colors[pad.type];
 
-        this.ctx.shadowBlur = 25;
-        this.ctx.shadowColor = cfg.color;
-
-        if (cfg.shape === 'circle') {
-            // Incoming punch circle
-            this.ctx.strokeStyle = cfg.color;
-            this.ctx.lineWidth = 5;
+        this.ctx.shadowBlur = 30;
+        this.ctx.shadowColor = color;
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 6;
+        
+        if (pad.type === 'block') {
             this.ctx.beginPath();
-            this.ctx.arc(0, 0, W, 0, Math.PI * 2);
-            this.ctx.fillStyle = `rgba(255,62,62,0.15)`;
+            this.ctx.moveTo(-60, -60); this.ctx.lineTo(60, -60);
+            this.ctx.lineTo(40, 60);   this.ctx.lineTo(-40, 60);
+            this.ctx.closePath();
+            this.ctx.stroke();
+            this.ctx.fillStyle = 'rgba(255,62,62,0.2)';
             this.ctx.fill();
-            this.ctx.stroke();
-
-            // Inner ring
-            this.ctx.beginPath();
-            this.ctx.arc(0, 0, W * 0.6, 0, Math.PI * 2);
-            this.ctx.strokeStyle = 'rgba(255,62,62,0.6)';
-            this.ctx.stroke();
-
-            // Progress ring showing time left
-            if (pad.phase === 'hold') {
-                const pct = 1 - pad.holdTimer / this.holdFrames;
-                this.ctx.beginPath();
-                this.ctx.arc(0, 0, W + 10, -Math.PI/2, -Math.PI/2 + pct * Math.PI * 2);
-                this.ctx.strokeStyle = '#ff3e3e';
-                this.ctx.lineWidth = 6;
-                this.ctx.stroke();
-            }
         } else {
-            // Boxing pad rectangle
-            this.ctx.fillStyle = `${cfg.color}22`;
             this.ctx.beginPath();
-            this.roundRect(-W, -H, pad.width, pad.height, 16);
+            this.ctx.roundRect(-pad.width/2, -pad.height/2, pad.width, pad.height, 12);
+            this.ctx.stroke();
+            this.ctx.fillStyle = `${color}22`;
             this.ctx.fill();
-
-            this.ctx.strokeStyle = cfg.color;
-            this.ctx.lineWidth = 4;
-            this.ctx.stroke();
-
-            // Hit zone circle in center
-            this.ctx.beginPath();
-            this.ctx.arc(0, 0, 30, 0, Math.PI * 2);
-            this.ctx.strokeStyle = cfg.color;
-            this.ctx.lineWidth = 2;
-            this.ctx.stroke();
-
-            // Progress ring showing time left
-            if (pad.phase === 'hold') {
-                const pct = 1 - pad.holdTimer / this.holdFrames;
-                this.ctx.beginPath();
-                this.ctx.arc(0, 0, W + 8, -Math.PI/2, -Math.PI/2 + pct * Math.PI * 2);
-                this.ctx.strokeStyle = cfg.color;
-                this.ctx.lineWidth = 7;
-                this.ctx.stroke();
-            }
         }
 
-        // Label
-        const lines = cfg.label.split('\n');
+        // Timer bar on pad
+        const pct = 1 - pad.holdTimer / this.holdFrames;
+        this.ctx.lineWidth = 8;
+        this.ctx.beginPath();
+        this.ctx.arc(0, 0, 40, -Math.PI/2, -Math.PI/2 + (pct * Math.PI * 2));
+        this.ctx.stroke();
+
         this.ctx.fillStyle = 'white';
         this.ctx.font = 'bold 16px Orbitron';
         this.ctx.textAlign = 'center';
-        lines.forEach((line, i) => {
-            this.ctx.fillText(line, 0, (i - (lines.length - 1) / 2) * 20);
-        });
-
-        // Arrow hint during entering phase
-        if (pad.phase === 'entering') {
-            this.ctx.fillStyle = `${cfg.color}88`;
-            this.ctx.font = '28px Arial';
-            const arrowMap = { left: '→', right: '←', hook: '↓', dodge: '⚡' };
-            this.ctx.fillText(arrowMap[pad.type] || '', 0, H + 30);
-        }
+        this.ctx.fillText(pad.type.toUpperCase(), 0, 5);
 
         this.ctx.restore();
     }
 
-    roundRect(x, y, w, h, r) {
-        this.ctx.beginPath();
-        this.ctx.moveTo(x+r, y);
-        this.ctx.lineTo(x+w-r, y);
-        this.ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-        this.ctx.lineTo(x+w, y+h-r);
-        this.ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-        this.ctx.lineTo(x+r, y+h);
-        this.ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-        this.ctx.lineTo(x, y+r);
-        this.ctx.quadraticCurveTo(x, y, x+r, y);
-        this.ctx.closePath();
-    }
-
     drawHUD() {
-        const W = this.canvas.width;
-        // Health bar
-        this.ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        this.ctx.beginPath();
-        this.roundRect(10, this.canvas.height - 44, 210, 26, 4);
-        this.ctx.fill();
-        const hColor = this.health > 60 ? '#00ff88' : this.health > 30 ? '#ffa500' : '#ff3e3e';
-        this.ctx.fillStyle = hColor;
-        this.ctx.shadowBlur = 8;
-        this.ctx.shadowColor = hColor;
-        this.ctx.beginPath();
-        this.roundRect(12, this.canvas.height - 42, Math.max(0, this.health * 2.06), 22, 3);
-        this.ctx.fill();
-        this.ctx.shadowBlur = 0;
+        // Simple health bar
+        this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        this.ctx.fillRect(20, 20, 200, 15);
+        this.ctx.fillStyle = this.health > 40 ? '#00ff88' : '#ff3e3e';
+        this.ctx.fillRect(20, 20, this.health * 2, 15);
         this.ctx.fillStyle = 'white';
-        this.ctx.font = 'bold 11px Orbitron';
-        this.ctx.fillText(`HP ${this.health}`, 16, this.canvas.height - 24);
-
-        // Speed tag
-        this.ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        this.ctx.font = '11px Orbitron';
-        this.ctx.textAlign = 'right';
-        this.ctx.fillText(`SPD x${this.slideSpeed.toFixed(1)}`, W - 10, this.canvas.height - 24);
-        this.ctx.textAlign = 'left';
-
-        // Combo
+        this.ctx.font = '12px Orbitron';
+        this.ctx.fillText(`HP: ${this.health}`, 20, 50);
+        
         if (this.combo > 2) {
             this.ctx.fillStyle = '#ffd700';
-            this.ctx.shadowBlur = 12;
-            this.ctx.shadowColor = '#ffd700';
-            this.ctx.font = `bold ${Math.min(36, 18 + this.combo * 2)}px Orbitron`;
+            this.ctx.font = 'bold 30px Orbitron';
             this.ctx.textAlign = 'center';
-            this.ctx.fillText(`${this.combo}x COMBO!`, W / 2, 40);
-            this.ctx.shadowBlur = 0;
-            this.ctx.textAlign = 'left';
+            this.ctx.fillText(`${this.combo}x COMBO`, this.canvas.width/2, 50);
         }
     }
 
