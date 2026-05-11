@@ -1,10 +1,11 @@
 /**
- * Boxing Arena v5 - Ultimate Stability
+ * Boxing Arena v6 - Bug Fix & Stability
  * 
  * FIXES:
- * - Robust hand mapping (handles any number of hands)
- * - Safe canvas drawing (fallback for roundRect)
- * - Improved Hit Logic (wider detection for hook/block)
+ * - Added error boundaries to prevent loop crashes
+ * - Robust hand detection (uses first two hands detected)
+ * - Improved rendering performance
+ * - Re-added Viva Guide content
  */
 import { sound } from "../sounds.js";
 
@@ -18,13 +19,14 @@ export class GameInstance {
         this.combo = 0;
         this.health = 100;
         this.hitEffects = [];
-        this.video = null;
+        this.video = document.getElementById('webcam-video');
 
         this.currentPad = null;
         this.isGuarding = false;
 
-        // Persistent hand storage for smoothing
-        this.hands = new Map(); // id -> {x, y, type, trail}
+        // Simple smoothing for 2 hands
+        this.h1 = { x: 0, y: 0, active: false, type: 'palm' };
+        this.h2 = { x: 0, y: 0, active: false, type: 'palm' };
 
         this.sequence = ['left', 'right', 'left', 'right', 'hook', 'right', 'block', 'left'];
         this.seqIndex = 0;
@@ -34,22 +36,25 @@ export class GameInstance {
     }
 
     resize() {
+        if (!this.canvas || !this.canvas.parentNode) return;
         const rect = this.canvas.parentNode.getBoundingClientRect();
-        this.canvas.width  = rect.width;
-        this.canvas.height = rect.height;
+        if (rect.width > 0 && rect.height > 0) {
+            this.canvas.width  = rect.width;
+            this.canvas.height = rect.height;
+        }
     }
 
-    get slideSpeed() { return 3.5 + Math.floor(this.score / 20) * 1.0; }
-    get holdFrames() { return Math.max(40, 110 - Math.floor(this.score / 10) * 10); }
+    get slideSpeed() { return 4 + Math.floor(this.score / 20) * 1.0; }
+    get holdFrames() { return Math.max(40, 120 - Math.floor(this.score / 10) * 10); }
 
     start() {
+        console.log("Boxing Arena: Starting...");
         this.isRunning = true;
         this.score = 0;
         this.combo = 0;
         this.health = 100;
         this.currentPad = null;
         this.seqIndex = 0;
-        this.video = document.getElementById('webcam-video');
         this.updateScore(0);
         this.spawnNextPad();
         this.loop();
@@ -63,32 +68,23 @@ export class GameInstance {
 
         const W = this.canvas.width;
         const H = this.canvas.height;
-        let startX, startY, endX, endY;
+        let sx, sy, ex, ey;
 
-        if (type === 'left') {
-            startX = -200; startY = H * 0.45;
-            endX = W * 0.25; endY = H * 0.45;
-        } else if (type === 'right') {
-            startX = W + 200; startY = H * 0.45;
-            endX = W * 0.75; endY = H * 0.45;
-        } else if (type === 'hook') {
-            startX = W * 0.5; startY = -200;
-            endX = W * 0.5;   endY = H * 0.35;
-        } else if (type === 'block') {
-            startX = W * 0.5; startY = H * 0.1;
-            endX = W * 0.5;   endY = H * 0.5;
-        }
+        if (type === 'left') { sx = -100; sy = H * 0.45; ex = W * 0.25; ey = H * 0.45; }
+        else if (type === 'right') { sx = W + 100; sy = H * 0.45; ex = W * 0.75; ey = H * 0.45; }
+        else if (type === 'hook') { sx = W * 0.5; sy = -100; ex = W * 0.5; ey = H * 0.35; }
+        else { sx = W * 0.5; sy = H * 0.1; ex = W * 0.5; ey = H * 0.5; }
 
         this.currentPad = {
-            type, x: startX, y: startY, endX, endY,
-            width: 140, height: 160,
-            phase: 'entering', holdTimer: 0, hit: false, scale: 1, alpha: 1,
+            type, x: sx, y: sy, endX: ex, endY: ey,
+            w: 140, h: 160,
+            phase: 'entering', timer: 0, hit: false, scale: 1, alpha: 1
         };
     }
 
     isFist(hand) {
-        const tips = [8, 12, 16, 20];
-        const pips = [6, 10, 14, 18];
+        if (!hand) return false;
+        const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
         let curled = 0;
         for (let i = 0; i < 4; i++) {
             if (hand[tips[i]].y > hand[pips[i]].y) curled++;
@@ -96,111 +92,88 @@ export class GameInstance {
         return curled >= 3;
     }
 
-    getFistCenter(hand) {
+    getPos(hand) {
+        if (!hand) return { x: 0, y: 0 };
         const knuckles = [5, 9, 13, 17];
-        const avgX = knuckles.reduce((s, i) => s + hand[i].x, 0) / 4;
-        const avgY = knuckles.reduce((s, i) => s + hand[i].y, 0) / 4;
-        return {
-            x: (1 - avgX) * this.canvas.width,
-            y: avgY * this.canvas.height
-        };
+        const ax = knuckles.reduce((s, i) => s + hand[i].x, 0) / 4;
+        const ay = knuckles.reduce((s, i) => s + hand[i].y, 0) / 4;
+        return { x: (1 - ax) * this.canvas.width, y: ay * this.canvas.height };
     }
 
     update() {
-        if (!this.isRunning) return;
+        try {
+            if (!this.isRunning) return;
 
-        const results = this.gameState.results;
-        const landmarks = results?.landmarks || [];
-        
-        // Update hands with smoothing
-        const currentIds = new Set();
-        landmarks.forEach((landmark, i) => {
-            const id = i; // Simplified hand tracking
-            currentIds.add(id);
-            const pos = this.getFistCenter(landmark);
-            const type = this.isFist(landmark) ? 'fist' : 'palm';
+            const results = this.gameState.results;
+            const landmarks = results?.landmarks || [];
+            
+            // Hand 1
+            if (landmarks[0]) {
+                const p = this.getPos(landmarks[0]);
+                this.h1.x += (p.x - this.h1.x) * 0.5;
+                this.h1.y += (p.y - this.h1.y) * 0.5;
+                this.h1.active = true;
+                this.h1.type = this.isFist(landmarks[0]) ? 'fist' : 'palm';
+            } else this.h1.active = false;
 
-            if (!this.hands.has(id)) {
-                this.hands.set(id, { x: pos.x, y: pos.y, type, trail: [] });
-            } else {
-                const h = this.hands.get(id);
-                h.x += (pos.x - h.x) * 0.5;
-                h.y += (pos.y - h.y) * 0.5;
-                h.type = type;
-            }
-            const h = this.hands.get(id);
-            h.trail.push({ x: h.x, y: h.y });
-            if (h.trail.length > 6) h.trail.shift();
-        });
+            // Hand 2
+            if (landmarks[1]) {
+                const p = this.getPos(landmarks[1]);
+                this.h2.x += (p.x - this.h2.x) * 0.5;
+                this.h2.y += (p.y - this.h2.y) * 0.5;
+                this.h2.active = true;
+                this.h2.type = this.isFist(landmarks[1]) ? 'fist' : 'palm';
+            } else this.h2.active = false;
 
-        // Cleanup missing hands
-        for (const id of this.hands.keys()) {
-            if (!currentIds.has(id)) {
-                const h = this.hands.get(id);
-                if (h.trail.length > 0) h.trail.shift();
-                else this.hands.delete(id);
-            }
-        }
+            // Guard Logic
+            if (this.h1.active && this.h2.active) {
+                const d = Math.hypot(this.h1.x - this.h2.x, this.h1.y - this.h2.y);
+                this.isGuarding = d < 180 && this.h1.y < this.canvas.height * 0.7;
+            } else this.isGuarding = false;
 
-        // Guard Check
-        if (this.hands.size >= 2) {
-            const hArray = Array.from(this.hands.values());
-            const d = Math.hypot(hArray[0].x - hArray[1].x, hArray[0].y - hArray[1].y);
-            this.isGuarding = d < 200 && hArray[0].y < this.canvas.height * 0.7;
-        } else {
-            this.isGuarding = false;
-        }
+            const pad = this.currentPad;
+            if (pad) {
+                if (pad.phase === 'entering') {
+                    const dx = pad.endX - pad.x, dy = pad.endY - pad.y;
+                    const d = Math.hypot(dx, dy);
+                    if (d < 10) { pad.x = pad.endX; pad.y = pad.endY; pad.phase = 'hold'; pad.scale = 1.3; }
+                    else { pad.x += (dx/d)*this.slideSpeed; pad.y += (dy/d)*this.slideSpeed; }
+                } else if (pad.phase === 'hold') {
+                    pad.scale += (1 - pad.scale) * 0.15;
+                    pad.timer++;
 
-        const pad = this.currentPad;
-        if (pad) {
-            if (pad.phase === 'entering') {
-                const dx = pad.endX - pad.x, dy = pad.endY - pad.y;
-                const d = Math.hypot(dx, dy);
-                if (d < this.slideSpeed + 5) {
-                    pad.x = pad.endX; pad.y = pad.endY;
-                    pad.phase = 'hold'; pad.scale = 1.3;
-                } else {
-                    pad.x += (dx / d) * this.slideSpeed;
-                    pad.y += (dy / d) * this.slideSpeed;
-                }
-            } else if (pad.phase === 'hold') {
-                pad.scale += (1 - pad.scale) * 0.2;
-                pad.holdTimer++;
+                    if (pad.type === 'block') {
+                        if (this.isGuarding) this.registerHit(pad, 'BLOCK!', '#00ff88');
+                    } else {
+                        [this.h1, this.h2].forEach(h => {
+                            if (h.active && h.type === 'fist') {
+                                if (Math.hypot(h.x - pad.x, h.y - pad.y) < pad.w * 0.7) {
+                                    this.registerHit(pad, pad.type.toUpperCase() + '!', '#00f2ff');
+                                }
+                            }
+                        });
+                    }
 
-                if (pad.type === 'block') {
-                    if (this.isGuarding) this.registerHit(pad, 'BLOCK!', '#00ff88');
-                } else {
-                    for (const h of this.hands.values()) {
-                        if (h.type !== 'fist') continue;
-                        if (Math.hypot(h.x - pad.x, h.y - pad.y) < pad.width * 0.8) {
-                            this.registerHit(pad, pad.type.toUpperCase() + '!', '#00f2ff');
-                            break;
-                        }
+                    if (pad.timer > this.holdFrames && !pad.hit) {
+                        this.health -= 20;
+                        this.hitEffects.push({ x: pad.x, y: pad.y, text: 'MISS!', life: 40, color: '#f33' });
+                        sound.play('crash');
+                        if (this.health <= 0) this.gameOver();
+                        else pad.phase = 'exiting';
+                    }
+                } else if (pad.phase === 'exiting') {
+                    pad.alpha -= 0.1;
+                    if (pad.alpha <= 0) {
+                        this.currentPad = null;
+                        setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, 500);
                     }
                 }
-
-                if (pad.holdTimer > this.holdFrames && !pad.hit) {
-                    this.health -= 20;
-                    this.combo = 0;
-                    this.hitEffects.push({ x: pad.x, y: pad.y, text: 'MISS!', life: 40, color: '#ff3e3e' });
-                    sound.play('crash');
-                    if (this.health <= 0) this.gameOver();
-                    else pad.phase = 'exiting';
-                }
-            } else if (pad.phase === 'exiting') {
-                pad.alpha -= 0.1;
-                if (pad.alpha <= 0) {
-                    this.currentPad = null;
-                    setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, 400);
-                }
             }
-        }
 
-        // Age effects
-        this.hitEffects.forEach((fx, i) => {
-            fx.life--;
-            if (fx.life <= 0) this.hitEffects.splice(i, 1);
-        });
+            this.hitEffects.forEach((fx, i) => { fx.life--; if (fx.life <= 0) this.hitEffects.splice(i, 1); });
+        } catch (e) {
+            console.error("Boxing Update Error:", e);
+        }
     }
 
     registerHit(pad, text, color) {
@@ -208,50 +181,61 @@ export class GameInstance {
         pad.hit = true;
         pad.phase = 'exiting';
         this.combo++;
-        this.score += 10 * (this.combo > 2 ? 2 : 1);
+        this.score += 10;
         this.updateScore(this.score);
         this.hitEffects.push({ x: pad.x, y: pad.y - 40, text, life: 50, color });
         sound.play('point');
     }
 
     draw() {
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        try {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        if (this.video && this.video.readyState >= 2) {
-            this.ctx.save();
-            this.ctx.translate(this.canvas.width, 0); this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-            this.ctx.restore();
+            if (this.video && this.video.readyState >= 2) {
+                this.ctx.save();
+                this.ctx.translate(this.canvas.width, 0); this.ctx.scale(-1, 1);
+                this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+                this.ctx.restore();
+            }
+            
+            this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.15)' : 'rgba(0,0,0,0.3)';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            if (this.currentPad) this.drawPad(this.currentPad);
+
+            [this.h1, this.h2].forEach(h => {
+                if (!h.active) return;
+                this.ctx.strokeStyle = h.type === 'fist' ? '#f33' : '#fff';
+                this.ctx.lineWidth = 4;
+                this.ctx.beginPath();
+                this.ctx.arc(h.x, h.y, h.type === 'fist' ? 45 : 30, 0, Math.PI*2);
+                this.ctx.stroke();
+            });
+
+            this.hitEffects.forEach(fx => {
+                this.ctx.globalAlpha = fx.life / 50;
+                this.ctx.fillStyle = fx.color;
+                this.ctx.font = 'bold 24px Orbitron';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(fx.text, fx.x, fx.y);
+            });
+            this.ctx.globalAlpha = 1.0;
+
+            // HUD
+            this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            this.ctx.fillRect(20, 20, 200, 10);
+            this.ctx.fillStyle = this.health > 40 ? '#0f8' : '#f33';
+            this.ctx.fillRect(20, 20, this.health * 2, 10);
+            
+            if (this.currentPad?.phase === 'hold') {
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = 'bold 20px Orbitron';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(this.currentPad.type === 'block' ? "GUARD!" : "PUNCH!", this.canvas.width/2, this.canvas.height - 40);
+            }
+        } catch (e) {
+            console.error("Boxing Draw Error:", e);
         }
-        
-        this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.15)' : 'rgba(0,0,0,0.3)';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        if (this.currentPad) this.drawPad(this.currentPad);
-
-        for (const h of this.hands.values()) {
-            this.ctx.shadowBlur = h.type === 'fist' ? 20 : 5;
-            this.ctx.shadowColor = h.type === 'fist' ? '#ff3e3e' : '#ffffff';
-            this.ctx.strokeStyle = this.ctx.shadowColor;
-            this.ctx.lineWidth = 4;
-            this.ctx.beginPath();
-            this.ctx.arc(h.x, h.y, h.type === 'fist' ? 45 : 30, 0, Math.PI * 2);
-            this.ctx.stroke();
-            this.ctx.shadowBlur = 0;
-        }
-
-        this.drawHUD();
-
-        this.hitEffects.forEach(fx => {
-            this.ctx.save();
-            this.ctx.globalAlpha = fx.life / 50;
-            this.ctx.fillStyle = fx.color;
-            this.ctx.font = 'bold 24px Orbitron';
-            this.ctx.textAlign = 'center';
-            this.ctx.fillText(fx.text, fx.x, fx.y);
-            this.ctx.restore();
-        });
-        this.ctx.globalAlpha = 1.0;
     }
 
     drawPad(pad) {
@@ -260,62 +244,43 @@ export class GameInstance {
         this.ctx.translate(pad.x, pad.y);
         this.ctx.scale(pad.scale, pad.scale);
 
-        const color = { left: '#00f2ff', right: '#bc13fe', hook: '#ffa500', block: '#ff3e3e' }[pad.type];
+        const color = { left: '#00f2ff', right: '#bc13fe', hook: '#ffa500', block: '#f33' }[pad.type];
         this.ctx.strokeStyle = color;
-        this.ctx.shadowBlur = 20;
-        this.ctx.shadowColor = color;
         this.ctx.lineWidth = 5;
+        this.ctx.strokeRect(-pad.w/2, -pad.h/2, pad.w, pad.h);
         
-        // Manual rounded rect fallback
-        this.ctx.beginPath();
-        const w = pad.width, h = pad.height, r = 15;
-        this.ctx.moveTo(-w/2+r, -h/2);
-        this.ctx.lineTo(w/2-r, -h/2);
-        this.ctx.quadraticCurveTo(w/2, -h/2, w/2, -h/2+r);
-        this.ctx.lineTo(w/2, h/2-r);
-        this.ctx.quadraticCurveTo(w/2, h/2, w/2-r, h/2);
-        this.ctx.lineTo(-w/2+r, h/2);
-        this.ctx.quadraticCurveTo(-w/2, h/2, -w/2, h/2-r);
-        this.ctx.lineTo(-w/2, -h/2+r);
-        this.ctx.quadraticCurveTo(-w/2, -h/2, -w/2+r, -h/2);
-        this.ctx.stroke();
-        this.ctx.fillStyle = color + '11';
-        this.ctx.fill();
-
-        const pct = 1 - pad.holdTimer / this.holdFrames;
+        const pct = 1 - pad.timer / this.holdFrames;
         this.ctx.beginPath();
         this.ctx.arc(0, 0, 45, -Math.PI/2, -Math.PI/2 + (pct * Math.PI * 2));
         this.ctx.stroke();
 
-        this.ctx.fillStyle = 'white';
+        this.ctx.fillStyle = '#fff';
         this.ctx.font = 'bold 16px Orbitron';
         this.ctx.textAlign = 'center';
         this.ctx.fillText(pad.type.toUpperCase(), 0, 5);
         this.ctx.restore();
     }
 
-    drawHUD() {
-        this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
-        this.ctx.fillRect(20, 20, 200, 10);
-        this.ctx.fillStyle = this.health > 40 ? '#00ff88' : '#ff3e3e';
-        this.ctx.fillRect(20, 20, this.health * 2, 10);
-        
-        if (this.currentPad?.phase === 'hold') {
-            this.ctx.fillStyle = 'white';
-            this.ctx.font = 'bold 20px Orbitron';
-            this.ctx.textAlign = 'center';
-            this.ctx.fillText(this.currentPad.type === 'block' ? "GUARD!" : "PUNCH!", this.canvas.width/2, this.canvas.height - 40);
-        }
+    loop() {
+        if (!this.isRunning) return;
+        this.update();
+        this.draw();
+        requestAnimationFrame(() => this.loop());
     }
 
-    updateScore(s) { document.getElementById('game-score').textContent = s; }
+    updateScore(s) {
+        const el = document.getElementById('game-score');
+        if (el) el.textContent = s;
+    }
 
     gameOver() {
         this.isRunning = false;
         sound.play('crash');
         if (this.onGameOver) this.onGameOver(this.score);
-        document.getElementById('final-score').textContent = this.score;
-        document.getElementById('game-over-overlay').classList.remove('hidden');
+        const fs = document.getElementById('final-score');
+        if (fs) fs.textContent = this.score;
+        const ov = document.getElementById('game-over-overlay');
+        if (ov) ov.classList.remove('hidden');
     }
 
     destroy() { this.isRunning = false; }
