@@ -1,11 +1,10 @@
 /**
- * Boxing Arena v4 - Robust Detection & Smoothing
+ * Boxing Arena v5 - Ultimate Stability
  * 
  * FIXES:
- * - Hands disappearing during fast punches (Added position smoothing)
- * - Improved Fist detection (Distance based + Y check)
- * - Added a "Trail" effect for fists during punches
- * - Fixed Hook hit zone to be even more forgiving
+ * - Robust hand mapping (handles any number of hands)
+ * - Safe canvas drawing (fallback for roundRect)
+ * - Improved Hit Logic (wider detection for hook/block)
  */
 import { sound } from "../sounds.js";
 
@@ -18,18 +17,14 @@ export class GameInstance {
         this.score = 0;
         this.combo = 0;
         this.health = 100;
-        this.frameCount = 0;
         this.hitEffects = [];
         this.video = null;
 
         this.currentPad = null;
         this.isGuarding = false;
 
-        // Smoothing for hands
-        this.smoothHands = [
-            { x: 0, y: 0, active: false, type: 'fist', trail: [] },
-            { x: 0, y: 0, active: false, type: 'fist', trail: [] }
-        ];
+        // Persistent hand storage for smoothing
+        this.hands = new Map(); // id -> {x, y, type, trail}
 
         this.sequence = ['left', 'right', 'left', 'right', 'hook', 'right', 'block', 'left'];
         this.seqIndex = 0;
@@ -44,8 +39,8 @@ export class GameInstance {
         this.canvas.height = rect.height;
     }
 
-    get slideSpeed() { return 3.5 + Math.floor(this.score / 20) * 0.8; }
-    get holdFrames() { return Math.max(45, 100 - Math.floor(this.score / 12) * 8); }
+    get slideSpeed() { return 3.5 + Math.floor(this.score / 20) * 1.0; }
+    get holdFrames() { return Math.max(40, 110 - Math.floor(this.score / 10) * 10); }
 
     start() {
         this.isRunning = true;
@@ -71,14 +66,14 @@ export class GameInstance {
         let startX, startY, endX, endY;
 
         if (type === 'left') {
-            startX = -150; startY = H * 0.45;
+            startX = -200; startY = H * 0.45;
             endX = W * 0.25; endY = H * 0.45;
         } else if (type === 'right') {
-            startX = W + 150; startY = H * 0.45;
+            startX = W + 200; startY = H * 0.45;
             endX = W * 0.75; endY = H * 0.45;
         } else if (type === 'hook') {
-            startX = W * 0.5; startY = -150;
-            endX = W * 0.5;   endY = H * 0.35; // Forgiving Hook zone
+            startX = W * 0.5; startY = -200;
+            endX = W * 0.5;   endY = H * 0.35;
         } else if (type === 'block') {
             startX = W * 0.5; startY = H * 0.1;
             endX = W * 0.5;   endY = H * 0.5;
@@ -91,25 +86,14 @@ export class GameInstance {
         };
     }
 
-    // More robust fist detection: Tip must be close to Knuckle or PIP
     isFist(hand) {
-        const fingerIndices = [8, 12, 16, 20];
-        const pipIndices = [6, 10, 14, 18];
-        const knuckleIndices = [5, 9, 13, 17];
-        
-        // Count how many fingers are "curled"
+        const tips = [8, 12, 16, 20];
+        const pips = [6, 10, 14, 18];
         let curled = 0;
         for (let i = 0; i < 4; i++) {
-            const tip = hand[fingerIndices[i]];
-            const pip = hand[pipIndices[i]];
-            const knu = hand[knuckleIndices[i]];
-            
-            // If tip is below PIP or very close to knuckle, it's curled
-            if (tip.y > pip.y || Math.hypot(tip.x - knu.x, tip.y - knu.y) < 0.06) {
-                curled++;
-            }
+            if (hand[tips[i]].y > hand[pips[i]].y) curled++;
         }
-        return curled >= 3; // 3 or 4 fingers curled = fist
+        return curled >= 3;
     }
 
     getFistCenter(hand) {
@@ -124,50 +108,60 @@ export class GameInstance {
 
     update() {
         if (!this.isRunning) return;
-        this.frameCount++;
 
         const results = this.gameState.results;
         const landmarks = results?.landmarks || [];
         
-        // Update Smooth Hands
-        this.smoothHands.forEach((sh, i) => {
-            if (landmarks[i]) {
-                const fc = this.getFistCenter(landmarks[i]);
-                const fist = this.isFist(landmarks[i]);
-                
-                if (!sh.active) { sh.x = fc.x; sh.y = fc.y; sh.active = true; }
-                else {
-                    // Smooth follow
-                    sh.x += (fc.x - sh.x) * 0.4;
-                    sh.y += (fc.y - sh.y) * 0.4;
-                }
-                sh.type = fist ? 'fist' : 'palm';
-                
-                // Add to trail
-                sh.trail.push({ x: sh.x, y: sh.y, life: 10 });
-                if (sh.trail.length > 8) sh.trail.shift();
+        // Update hands with smoothing
+        const currentIds = new Set();
+        landmarks.forEach((landmark, i) => {
+            const id = i; // Simplified hand tracking
+            currentIds.add(id);
+            const pos = this.getFistCenter(landmark);
+            const type = this.isFist(landmark) ? 'fist' : 'palm';
+
+            if (!this.hands.has(id)) {
+                this.hands.set(id, { x: pos.x, y: pos.y, type, trail: [] });
             } else {
-                // Decay trail
-                if (sh.trail.length > 0) sh.trail.shift();
-                else sh.active = false;
+                const h = this.hands.get(id);
+                h.x += (pos.x - h.x) * 0.5;
+                h.y += (pos.y - h.y) * 0.5;
+                h.type = type;
             }
+            const h = this.hands.get(id);
+            h.trail.push({ x: h.x, y: h.y });
+            if (h.trail.length > 6) h.trail.shift();
         });
 
-        this.isGuarding = landmarks.length >= 2 && 
-            Math.hypot(this.smoothHands[0].x - this.smoothHands[1].x, this.smoothHands[0].y - this.smoothHands[1].y) < 180 &&
-            this.smoothHands[0].y < this.canvas.height * 0.7;
+        // Cleanup missing hands
+        for (const id of this.hands.keys()) {
+            if (!currentIds.has(id)) {
+                const h = this.hands.get(id);
+                if (h.trail.length > 0) h.trail.shift();
+                else this.hands.delete(id);
+            }
+        }
+
+        // Guard Check
+        if (this.hands.size >= 2) {
+            const hArray = Array.from(this.hands.values());
+            const d = Math.hypot(hArray[0].x - hArray[1].x, hArray[0].y - hArray[1].y);
+            this.isGuarding = d < 200 && hArray[0].y < this.canvas.height * 0.7;
+        } else {
+            this.isGuarding = false;
+        }
 
         const pad = this.currentPad;
         if (pad) {
             if (pad.phase === 'entering') {
                 const dx = pad.endX - pad.x, dy = pad.endY - pad.y;
-                const dist = Math.hypot(dx, dy);
-                if (dist < this.slideSpeed + 2) {
+                const d = Math.hypot(dx, dy);
+                if (d < this.slideSpeed + 5) {
                     pad.x = pad.endX; pad.y = pad.endY;
                     pad.phase = 'hold'; pad.scale = 1.3;
                 } else {
-                    pad.x += (dx / dist) * this.slideSpeed;
-                    pad.y += (dy / dist) * this.slideSpeed;
+                    pad.x += (dx / d) * this.slideSpeed;
+                    pad.y += (dy / d) * this.slideSpeed;
                 }
             } else if (pad.phase === 'hold') {
                 pad.scale += (1 - pad.scale) * 0.2;
@@ -176,35 +170,37 @@ export class GameInstance {
                 if (pad.type === 'block') {
                     if (this.isGuarding) this.registerHit(pad, 'BLOCK!', '#00ff88');
                 } else {
-                    this.smoothHands.forEach(sh => {
-                        if (!sh.active || sh.type !== 'fist') return;
-                        const dist = Math.hypot(sh.x - pad.x, sh.y - pad.y);
-                        const hitRange = pad.width * 0.75;
-                        if (dist < hitRange) this.registerHit(pad, pad.type.toUpperCase() + '!', '#00f2ff');
-                    });
+                    for (const h of this.hands.values()) {
+                        if (h.type !== 'fist') continue;
+                        if (Math.hypot(h.x - pad.x, h.y - pad.y) < pad.width * 0.8) {
+                            this.registerHit(pad, pad.type.toUpperCase() + '!', '#00f2ff');
+                            break;
+                        }
+                    }
                 }
 
                 if (pad.holdTimer > this.holdFrames && !pad.hit) {
-                    this.health -= 20; this.combo = 0;
-                    this.hitEffects.push({ x: pad.x, y: pad.y, text: 'MISS! -20HP', life: 45, color: '#ff3e3e' });
+                    this.health -= 20;
+                    this.combo = 0;
+                    this.hitEffects.push({ x: pad.x, y: pad.y, text: 'MISS!', life: 40, color: '#ff3e3e' });
                     sound.play('crash');
-                    if (this.health <= 0) { this.health = 0; this.gameOver(); return; }
-                    pad.phase = 'exiting';
+                    if (this.health <= 0) this.gameOver();
+                    else pad.phase = 'exiting';
                 }
             } else if (pad.phase === 'exiting') {
-                pad.alpha -= 0.1; pad.scale += 0.05;
+                pad.alpha -= 0.1;
                 if (pad.alpha <= 0) {
                     this.currentPad = null;
-                    setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, 500);
+                    setTimeout(() => { if (this.isRunning) this.spawnNextPad(); }, 400);
                 }
             }
         }
 
-        // Hit effects
-        for (let i = this.hitEffects.length - 1; i >= 0; i--) {
-            this.hitEffects[i].life--;
-            if (this.hitEffects[i].life <= 0) this.hitEffects.splice(i, 1);
-        }
+        // Age effects
+        this.hitEffects.forEach((fx, i) => {
+            fx.life--;
+            if (fx.life <= 0) this.hitEffects.splice(i, 1);
+        });
     }
 
     registerHit(pad, text, color) {
@@ -212,8 +208,7 @@ export class GameInstance {
         pad.hit = true;
         pad.phase = 'exiting';
         this.combo++;
-        const pts = 15 * (this.combo > 3 ? 2 : 1);
-        this.score += pts;
+        this.score += 10 * (this.combo > 2 ? 2 : 1);
         this.updateScore(this.score);
         this.hitEffects.push({ x: pad.x, y: pad.y - 40, text, life: 50, color });
         sound.play('point');
@@ -229,53 +224,29 @@ export class GameInstance {
             this.ctx.restore();
         }
         
-        // Background Tint
         this.ctx.fillStyle = this.isGuarding ? 'rgba(0,242,255,0.15)' : 'rgba(0,0,0,0.3)';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         if (this.currentPad) this.drawPad(this.currentPad);
 
-        // Draw Smooth Hands with Trails
-        this.smoothHands.forEach(sh => {
-            if (!sh.active && sh.trail.length === 0) return;
-            
-            // Draw Trail
-            sh.trail.forEach((t, i) => {
-                this.ctx.globalAlpha = (i / sh.trail.length) * 0.4;
-                this.ctx.fillStyle = sh.type === 'fist' ? '#ff3e3e' : '#00f2ff';
-                this.ctx.beginPath();
-                this.ctx.arc(t.x, t.y, 25 + i * 2, 0, Math.PI * 2);
-                this.ctx.fill();
-            });
-            this.ctx.globalAlpha = 1.0;
+        for (const h of this.hands.values()) {
+            this.ctx.shadowBlur = h.type === 'fist' ? 20 : 5;
+            this.ctx.shadowColor = h.type === 'fist' ? '#ff3e3e' : '#ffffff';
+            this.ctx.strokeStyle = this.ctx.shadowColor;
+            this.ctx.lineWidth = 4;
+            this.ctx.beginPath();
+            this.ctx.arc(h.x, h.y, h.type === 'fist' ? 45 : 30, 0, Math.PI * 2);
+            this.ctx.stroke();
+            this.ctx.shadowBlur = 0;
+        }
 
-            if (sh.active) {
-                const color = this.isGuarding ? '#00f2ff' : (sh.type === 'fist' ? '#ff3e3e' : '#ffffff');
-                this.ctx.shadowBlur = 20;
-                this.ctx.shadowColor = color;
-                this.ctx.strokeStyle = color;
-                this.ctx.lineWidth = 4;
-                this.ctx.beginPath();
-                this.ctx.arc(sh.x, sh.y, sh.type === 'fist' ? 45 : 30, 0, Math.PI * 2);
-                this.ctx.stroke();
-                if (sh.type === 'fist') {
-                    this.ctx.fillStyle = color + '22';
-                    this.ctx.fill();
-                }
-                this.ctx.shadowBlur = 0;
-            }
-        });
-
-        // HUD & Instructions
         this.drawHUD();
-        
-        // Hit Effects
+
         this.hitEffects.forEach(fx => {
             this.ctx.save();
-            this.ctx.globalAlpha = Math.max(0, fx.life / 50);
+            this.ctx.globalAlpha = fx.life / 50;
             this.ctx.fillStyle = fx.color;
-            this.ctx.shadowBlur = 10; this.ctx.shadowColor = fx.color;
-            this.ctx.font = 'bold 28px Orbitron';
+            this.ctx.font = 'bold 24px Orbitron';
             this.ctx.textAlign = 'center';
             this.ctx.fillText(fx.text, fx.x, fx.y);
             this.ctx.restore();
@@ -290,25 +261,30 @@ export class GameInstance {
         this.ctx.scale(pad.scale, pad.scale);
 
         const color = { left: '#00f2ff', right: '#bc13fe', hook: '#ffa500', block: '#ff3e3e' }[pad.type];
-        this.ctx.shadowBlur = 30; this.ctx.shadowColor = color;
-        this.ctx.strokeStyle = color; this.ctx.lineWidth = 6;
+        this.ctx.strokeStyle = color;
+        this.ctx.shadowBlur = 20;
+        this.ctx.shadowColor = color;
+        this.ctx.lineWidth = 5;
         
+        // Manual rounded rect fallback
         this.ctx.beginPath();
-        if (pad.type === 'block') {
-            this.ctx.moveTo(-60, -60); this.ctx.lineTo(60, -60);
-            this.ctx.lineTo(40, 60); this.ctx.lineTo(-40, 60);
-            this.ctx.closePath();
-        } else {
-            this.ctx.roundRect(-pad.width/2, -pad.height/2, pad.width, pad.height, 12);
-        }
+        const w = pad.width, h = pad.height, r = 15;
+        this.ctx.moveTo(-w/2+r, -h/2);
+        this.ctx.lineTo(w/2-r, -h/2);
+        this.ctx.quadraticCurveTo(w/2, -h/2, w/2, -h/2+r);
+        this.ctx.lineTo(w/2, h/2-r);
+        this.ctx.quadraticCurveTo(w/2, h/2, w/2-r, h/2);
+        this.ctx.lineTo(-w/2+r, h/2);
+        this.ctx.quadraticCurveTo(-w/2, h/2, -w/2, h/2-r);
+        this.ctx.lineTo(-w/2, -h/2+r);
+        this.ctx.quadraticCurveTo(-w/2, -h/2, -w/2+r, -h/2);
         this.ctx.stroke();
-        this.ctx.fillStyle = `${color}22`; this.ctx.fill();
+        this.ctx.fillStyle = color + '11';
+        this.ctx.fill();
 
-        // Timer
         const pct = 1 - pad.holdTimer / this.holdFrames;
-        this.ctx.lineWidth = 8;
         this.ctx.beginPath();
-        this.ctx.arc(0, 0, 40, -Math.PI/2, -Math.PI/2 + (pct * Math.PI * 2));
+        this.ctx.arc(0, 0, 45, -Math.PI/2, -Math.PI/2 + (pct * Math.PI * 2));
         this.ctx.stroke();
 
         this.ctx.fillStyle = 'white';
@@ -319,21 +295,16 @@ export class GameInstance {
     }
 
     drawHUD() {
-        this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        this.ctx.fillRect(20, 20, 200, 15);
+        this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        this.ctx.fillRect(20, 20, 200, 10);
         this.ctx.fillStyle = this.health > 40 ? '#00ff88' : '#ff3e3e';
-        this.ctx.fillRect(20, 20, this.health * 2, 15);
-        this.ctx.fillStyle = 'white';
-        this.ctx.font = '12px Orbitron';
-        this.ctx.textAlign = 'left';
-        this.ctx.fillText(`HP: ${this.health}`, 20, 50);
+        this.ctx.fillRect(20, 20, this.health * 2, 10);
         
         if (this.currentPad?.phase === 'hold') {
             this.ctx.fillStyle = 'white';
-            this.ctx.font = 'bold 24px Orbitron';
+            this.ctx.font = 'bold 20px Orbitron';
             this.ctx.textAlign = 'center';
-            const tip = this.currentPad.type === 'block' ? "🛡️ HANDS TOGETHER!" : "PUNCH!";
-            this.ctx.fillText(tip, this.canvas.width/2, this.canvas.height - 60);
+            this.ctx.fillText(this.currentPad.type === 'block' ? "GUARD!" : "PUNCH!", this.canvas.width/2, this.canvas.height - 40);
         }
     }
 
